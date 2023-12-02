@@ -1,0 +1,116 @@
+from fastapi import FastAPI, Request, Form, File, UploadFile
+from fastapi.templating import Jinja2Templates
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi import HTTPException
+from sqlalchemy import create_engine, Column, Integer, String, MetaData, Table
+from sqlalchemy.orm import sessionmaker
+from pydantic import BaseModel
+import csv
+from io import TextIOWrapper
+
+app = FastAPI()
+
+# Database setup
+DATABASE_URL = "sqlite:///./test.db"
+engine = create_engine(DATABASE_URL)
+metadata = MetaData()
+
+users = Table(
+    "users",
+    metadata,
+    Column("id", Integer, primary_key=True, index=True),
+    Column("name", String),
+    Column("age", Integer),
+)
+
+metadata.create_all(engine)
+
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Templates setup
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
+
+
+# Pydantic model for form validation
+class CSVData(BaseModel):
+    name_column: str
+    age_column: str
+
+
+# Route for the home page
+@app.get("/", response_class=HTMLResponse)
+async def read_root(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+
+# Route to handle CSV upload and processing
+@app.post("/uploadfile/")
+async def create_upload_file(
+    request: Request,
+    csv_data: CSVData,
+    file: UploadFile = File(...),
+):
+    # Process CSV file
+    contents = await file.read()
+    text = TextIOWrapper(contents, encoding="utf-8")
+    csv_reader = csv.DictReader(text)
+    rows = list(csv_reader)
+
+    # Validate if selected columns exist
+    if csv_data.name_column not in rows[0] or csv_data.age_column not in rows[0]:
+        raise HTTPException(
+            status_code=400,
+            detail="Selected columns do not exist in the CSV file",
+        )
+
+    # Save data to the database
+    with SessionLocal() as session:
+        for row in rows:
+            user = {
+                "name": row[csv_data.name_column],
+                "age": int(row[csv_data.age_column]),
+            }
+            session.execute(users.insert().values(user))
+
+    return templates.TemplateResponse(
+        "result.html", {"request": request, "message": "Data saved successfully"}
+    )
+
+
+
+
+
+//html file//
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CSV Uploader</title>
+</head>
+<body>
+    <h1>CSV Uploader</h1>
+    <form action="/uploadfile/" method="post" enctype="multipart/form-data">
+        <label for="file">Choose CSV file:</label>
+        <input type="file" name="file" accept=".csv" required><br><br>
+        <label for="name_column">Name Column:</label>
+        <input type="text" name="name_column" required><br><br>
+        <label for="age_column">Age Column:</label>
+        <input type="text" name="age_column" required><br><br>
+        <button type="submit">Submit</button>
+    </form>
+</body>
+</html>
+
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CSV Upload Result</title>
+</head>
+<body>
+    <h1>CSV Upload Result</h1>
+    <p>{{ message }}</p>
+    <a href="/">Go back</a>
+</body>
+</html>
